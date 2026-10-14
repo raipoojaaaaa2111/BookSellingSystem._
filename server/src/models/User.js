@@ -1,85 +1,117 @@
-const mongoose = require('mongoose');
+const { DataTypes, Model } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const { sequelize } = require('../config/db');
 
 /**
- * UserSchema — defines the structure of a User document in MongoDB.
- * Think of this as creating a table structure in SQL, but more flexible.
+ * User — Sequelize model representing the `users` table in MySQL.
+ *
+ * Each property here maps to a column in the table.
+ * Sequelize automatically adds `id` (auto-increment primary key),
+ * `createdAt`, and `updatedAt` columns.
  */
-const userSchema = new mongoose.Schema(
+class User extends Model {
+  /**
+   * matchPassword — instance method to compare a plain-text password
+   * with the hashed one stored in the database.
+   * Used during login.
+   */
+  async matchPassword(enteredPassword) {
+    return await bcrypt.compare(enteredPassword, this.password);
+  }
+}
+
+User.init(
   {
+    // Sequelize adds `id` (INT AUTO_INCREMENT PRIMARY KEY) automatically
     name: {
-      type: String,
-      required: [true, 'Name is required'],
-      trim: true,
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      validate: {
+        notEmpty: { msg: 'Name is required' },
+        len: { args: [1, 100], msg: 'Name must be between 1 and 100 characters' },
+      },
     },
     email: {
-      type: String,
-      required: [true, 'Email is required'],
-      unique: true,
-      lowercase: true,
-      trim: true,
-      match: [
-        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
-        'Please enter a valid email address',
-      ],
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      unique: true,   // Creates a UNIQUE index on this column in MySQL
+      validate: {
+        isEmail: { msg: 'Please enter a valid email address' },
+        notEmpty: { msg: 'Email is required' },
+      },
     },
     password: {
-      type: String,
-      required: [true, 'Password is required'],
-      minlength: [8, 'Password must be at least 8 characters'],
-      select: false, // Don't return the password by default when querying users
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      validate: {
+        len: { args: [8, 255], msg: 'Password must be at least 8 characters' },
+      },
     },
     collegeId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'College',
-      // Will be required once colleges are set up
+      type: DataTypes.INTEGER,
+      allowNull: true, // Optional until colleges table is set up
     },
     profilePhoto: {
-      type: String, // URL to the image stored in S3 (or local for now)
-      default: null,
+      type: DataTypes.STRING(500), // URL to the image (S3 or local)
+      allowNull: true,
+      defaultValue: null,
     },
     bio: {
-      type: String,
-      maxlength: [300, 'Bio cannot exceed 300 characters'],
-      default: '',
+      type: DataTypes.STRING(300),
+      allowNull: true,
+      defaultValue: '',
+      validate: {
+        len: { args: [0, 300], msg: 'Bio cannot exceed 300 characters' },
+      },
     },
     isVerified: {
-      type: Boolean,
-      default: false, // Email verification flag
+      type: DataTypes.BOOLEAN,
+      defaultValue: false, // Email verification flag
     },
     role: {
-      type: String,
-      enum: ['student', 'college_coordinator', 'platform_admin'],
-      default: 'student',
+      type: DataTypes.ENUM('student', 'college_coordinator', 'platform_admin'),
+      defaultValue: 'student',
     },
   },
   {
-    timestamps: true, // Automatically adds createdAt and updatedAt fields
+    sequelize,          // Pass the shared Sequelize instance
+    modelName: 'User',  // Sequelize will use the table name "Users" (auto-pluralized)
+    tableName: 'users', // Explicitly set to lowercase "users"
+    timestamps: true,   // Adds createdAt and updatedAt columns automatically
+
+    // Don't return the password field in query results by default.
+    // To include it (e.g. at login), use: User.findOne({ attributes: { include: ['password'] } })
+    defaultScope: {
+      attributes: { exclude: ['password'] },
+    },
+
+    // A named scope that includes the password — used only in authController login
+    scopes: {
+      withPassword: {
+        attributes: { include: ['password'] },
+      },
+    },
   }
 );
 
 /**
- * Pre-save middleware — runs BEFORE a user document is saved to the database.
- * We use this to hash the password automatically if it's been modified.
+ * beforeCreate hook — runs automatically BEFORE inserting a new user row.
+ * Hashes the plain-text password before saving it.
  */
-userSchema.pre('save', async function (next) {
-  // Only hash the password if it's been modified (or is new)
-  if (!this.isModified('password')) {
-    return next();
-  }
-
-  // Generate a salt (random string) and hash the password
+User.beforeCreate(async (user) => {
   const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
+  user.password = await bcrypt.hash(user.password, salt);
 });
 
 /**
- * matchPassword — instance method to compare a plain-text password with the hashed one.
- * We'll use this during login.
+ * beforeUpdate hook — runs BEFORE an UPDATE query on a user row.
+ * Only re-hashes if the password field was actually changed.
  */
-userSchema.methods.matchPassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
-};
+User.beforeUpdate(async (user) => {
+  if (user.changed('password')) {
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(user.password, salt);
+  }
+});
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = User;

@@ -3,7 +3,7 @@ const User = require('../models/User');
 
 /**
  * protect — middleware that verifies a JWT and attaches the user to req.user.
- * If the token is invalid or missing, it rejects the request.
+ * If the token is invalid or missing, it rejects the request with 401.
  */
 const protect = async (req, res, next) => {
   let token;
@@ -13,11 +13,9 @@ const protect = async (req, res, next) => {
     req.headers.authorization &&
     req.headers.authorization.startsWith('Bearer')
   ) {
-    // Extract the token from "Bearer <token>"
     token = req.headers.authorization.split(' ')[1];
   }
 
-  // If no token was found, reject the request
   if (!token) {
     return res.status(401).json({
       success: false,
@@ -26,11 +24,12 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    // Verify the token using the access secret
+    // Verify the token — throws if expired or tampered with
     const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
 
-    // Attach the user to the request object (without the password)
-    req.user = await User.findById(decoded.id).select('-password');
+    // Sequelize: findByPk = "find by primary key" (the `id` column)
+    // The default scope automatically excludes the password field
+    req.user = await User.findByPk(decoded.id);
 
     if (!req.user) {
       return res.status(401).json({
@@ -39,7 +38,7 @@ const protect = async (req, res, next) => {
       });
     }
 
-    next(); // Continue to the next middleware or route handler
+    next();
   } catch (error) {
     return res.status(401).json({
       success: false,
@@ -49,10 +48,10 @@ const protect = async (req, res, next) => {
 };
 
 /**
- * authorize — middleware that checks if the user has one of the allowed roles.
- * Use this after the protect middleware.
+ * authorize — checks if req.user has one of the permitted roles.
+ * Always use AFTER the protect middleware.
  *
- * Example: router.get('/admin', protect, authorize('platform_admin'), handler)
+ * Example: router.delete('/listing/:id', protect, authorize('platform_admin'), handler)
  */
 const authorize = (...roles) => {
   return (req, res, next) => {
