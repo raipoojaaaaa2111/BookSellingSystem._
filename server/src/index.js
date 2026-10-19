@@ -13,6 +13,10 @@ const cookieParser = require('cookie-parser');
 const { connectDB } = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 const authRoutes = require('./routes/authRoutes');
+const listingRoutes = require('./routes/listingRoutes');
+
+// Import models index to register all associations (User ↔ Listing etc.)
+require('./models/index');
 
 // Connect to MySQL and sync tables
 connectDB();
@@ -47,6 +51,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/listings', listingRoutes);
 
 // ─── Global Error Handler ───────────────────────────────────────────────────
 app.use(errorHandler);

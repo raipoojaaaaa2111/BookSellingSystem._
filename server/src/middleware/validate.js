@@ -75,3 +75,56 @@ const loginRules = [
 ];
 
 module.exports = { validate, registerRules, loginRules };
+
+/**
+ * listingRules — validation for POST /api/listings (create a listing)
+ *
+ * Rules:
+ *   title   → required, max 255 chars
+ *   author  → required
+ *   condition → must be one of the allowed values
+ *   type    → must be an array with at least one valid type
+ *   price   → required only if type includes 'sale', must be > 0
+ */
+const listingRules = [
+  body('title')
+    .trim()
+    .notEmpty().withMessage('Book title is required')
+    .isLength({ max: 255 }).withMessage('Title cannot exceed 255 characters'),
+
+  body('author')
+    .trim()
+    .notEmpty().withMessage('Author is required'),
+
+  body('condition')
+    .notEmpty().withMessage('Book condition is required')
+    .isIn(['new', 'like_new', 'good', 'fair', 'poor'])
+    .withMessage('Condition must be one of: new, like_new, good, fair, poor'),
+
+  body('type')
+    .isArray({ min: 1 }).withMessage('At least one listing type is required')
+    .custom((types) => {
+      const allowed = ['sale', 'exchange', 'donation'];
+      const invalid = types.filter((t) => !allowed.includes(t));
+      if (invalid.length > 0) {
+        throw new Error(`Invalid type(s): ${invalid.join(', ')}`);
+      }
+      return true;
+    }),
+
+  // price is required only when type includes 'sale'
+  body('price').custom((value, { req }) => {
+    const types = req.body.type || [];
+    if (types.includes('sale')) {
+      if (value === undefined || value === null || value === '') {
+        throw new Error('Price is required for sale listings');
+      }
+      if (parseFloat(value) < 0.01) {
+        throw new Error('Price must be at least $0.01');
+      }
+    }
+    return true;
+  }),
+];
+
+module.exports = { validate, registerRules, loginRules, listingRules };
