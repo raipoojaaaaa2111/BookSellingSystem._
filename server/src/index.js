@@ -1,15 +1,18 @@
+// ─── IMPORTANT: Load .env FIRST, before any other imports ───────────────────
+// dotenv reads the .env file and puts all values into process.env
+// If this runs after db.js is imported, DB_USER/DB_PASSWORD will be undefined
+const dotenv = require('dotenv');
+dotenv.config();
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const dotenv = require('dotenv');
+const cookieParser = require('cookie-parser');
 
 const { connectDB } = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 const authRoutes = require('./routes/authRoutes');
-
-// Load environment variables from .env file
-dotenv.config();
 
 // Connect to MySQL and sync tables
 connectDB();
@@ -18,6 +21,9 @@ const app = express();
 
 // ─── Security Middleware ────────────────────────────────────────────────────
 app.use(helmet());
+// cookieParser lets Express read cookies from incoming requests
+// needed for the httpOnly refresh token cookie
+app.use(cookieParser());
 
 app.use(
   cors({

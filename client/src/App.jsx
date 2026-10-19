@@ -4,38 +4,29 @@ import useAuthStore from './store/authStore';
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
+import ProfilePage from './pages/ProfilePage';
 
 /**
- * ProtectedRoute — wraps routes that require authentication.
- * If the user isn't logged in, they get redirected to /login.
+ * ProtectedRoute — redirects to /login if the user is not authenticated.
+ * Wraps any route that requires a logged-in user.
  */
 function ProtectedRoute({ children }) {
   const { token } = useAuthStore();
   return token ? children : <Navigate to="/login" replace />;
 }
 
-/**
- * App — the root component. Defines all the routes in the application.
- * As we build more pages (listings, profile, etc.) we'll add them here.
- */
 function App() {
   return (
     <Routes>
-      {/* Public routes — accessible without logging in */}
+      {/* Public routes */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
-      {/* Protected routes — require authentication */}
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <HomePage />
-          </ProtectedRoute>
-        }
-      />
+      {/* Protected routes */}
+      <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+      <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
 
-      {/* Catch-all: redirect unknown URLs to home */}
+      {/* Catch-all */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
