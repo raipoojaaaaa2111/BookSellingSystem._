@@ -1,41 +1,49 @@
 const User = require('./User');
 const Listing = require('./Listing');
+const Watchlist = require('./Watchlist');
 
 /**
- * Associations — define the relationships between models.
+ * Associations — all model relationships in one place.
  *
- * This file is the single place where all relationships are declared.
- * Import this file once in index.js and all associations are set up.
- *
- * User ←→ Listing (one-to-many)
- *   One user can have many listings.
- *   Each listing belongs to exactly one user.
- *
- * What this enables:
- *   // Get all listings with their owner's name included (single SQL JOIN)
- *   Listing.findAll({ include: User })
- *
- *   // Get a user with all their listings
- *   User.findOne({ include: Listing })
- *
- *   // Get just the user of a listing
- *   const listing = await Listing.findByPk(1)
- *   const owner = await listing.getUser()
+ * ── User ↔ Listing (one-to-many) ─────────────────────────────────────
+ * One user can have many listings.
+ * Each listing belongs to one user.
  */
-
-// A User has many Listings
-// Adds userId foreign key to the listings table (already defined in Listing model)
 User.hasMany(Listing, {
   foreignKey: 'userId',
-  as: 'listings',    // lets you do: user.getListings() or include: { model: Listing, as: 'listings' }
+  as: 'listings',
   onDelete: 'CASCADE',
 });
-
-// A Listing belongs to one User
-// Adds getUser() method to Listing instances
 Listing.belongsTo(User, {
   foreignKey: 'userId',
-  as: 'seller',      // lets you do: listing.getSeller() or include: { model: User, as: 'seller' }
+  as: 'seller',
 });
 
-module.exports = { User, Listing };
+/**
+ * ── User ↔ Listing via Watchlist (many-to-many) ──────────────────────
+ * A user can save many listings (watchlist).
+ * A listing can be saved by many users.
+ *
+ * belongsToMany automatically creates the join using the Watchlist table.
+ * It gives us:
+ *   user.getSavedListings()
+ *   listing.getSavedByUsers()
+ */
+User.belongsToMany(Listing, {
+  through: Watchlist,     // the join table
+  foreignKey: 'userId',
+  otherKey: 'listingId',
+  as: 'savedListings',
+});
+Listing.belongsToMany(User, {
+  through: Watchlist,
+  foreignKey: 'listingId',
+  otherKey: 'userId',
+  as: 'savedByUsers',
+});
+
+// Direct associations for Watchlist model
+User.hasMany(Watchlist, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Watchlist.belongsTo(Listing, { foreignKey: 'listingId', as: 'listing' });
+
+module.exports = { User, Listing, Watchlist };

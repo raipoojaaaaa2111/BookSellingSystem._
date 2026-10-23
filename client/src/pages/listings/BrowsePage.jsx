@@ -1,126 +1,83 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getListings } from '../../services/listingService';
 import useAuthStore from '../../store/authStore';
-
-// Condition labels — maps DB values to human-friendly text
-const CONDITION_LABELS = {
-  new: 'New',
-  like_new: 'Like New',
-  good: 'Good',
-  fair: 'Fair',
-  poor: 'Poor',
-};
-
-// Condition badge colors
-const CONDITION_COLORS = {
-  new: 'bg-green-100 text-green-700',
-  like_new: 'bg-blue-100 text-blue-700',
-  good: 'bg-yellow-100 text-yellow-700',
-  fair: 'bg-orange-100 text-orange-700',
-  poor: 'bg-red-100 text-red-700',
-};
-
-// Type badge colors
-const TYPE_COLORS = {
-  sale: 'bg-indigo-100 text-indigo-700',
-  exchange: 'bg-purple-100 text-purple-700',
-  donation: 'bg-green-100 text-green-700',
-};
+import ListingCard from '../../components/listings/ListingCard';
 
 /**
- * ListingCard — a single book card in the browse grid.
- * Shows photo (or placeholder), title, author, condition, type badges, price.
+ * useDebounce — delays updating a value until the user stops typing.
+ *
+ * Without debounce: every keystroke fires an API call
+ *   "c" → API call
+ *   "ca" → API call
+ *   "cal" → API call  (too many requests!)
+ *
+ * With debounce (500ms delay):
+ *   "c", "ca", "cal", "calc" (user types fast) → only ONE API call after they stop
  */
-function ListingCard({ listing }) {
+function useDebounce(value, delay = 500) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    // Set a timer — if value changes again before timer fires, timer resets
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer); // cleanup: cancel timer on next change
+  }, [value, delay]);
+
+  return debounced;
+}
+
+// Skeleton card — shown while listings are loading
+function SkeletonCard() {
   return (
-    <Link
-      to={`/listings/${listing.id}`}
-      className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow overflow-hidden group"
-    >
-      {/* Book cover photo or placeholder */}
-      <div className="h-44 bg-gray-100 flex items-center justify-center overflow-hidden">
-        {listing.photos?.length > 0 ? (
-          <img
-            src={listing.photos[0]}
-            alt={listing.title}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-          />
-        ) : (
-          <div className="text-5xl">📖</div>
-        )}
+    <div className="bg-white rounded-xl shadow-sm overflow-hidden animate-pulse">
+      <div className="h-44 bg-gray-200" />
+      <div className="p-4 space-y-2">
+        <div className="h-3 bg-gray-200 rounded w-1/3" />
+        <div className="h-4 bg-gray-200 rounded w-3/4" />
+        <div className="h-3 bg-gray-200 rounded w-1/2" />
+        <div className="h-3 bg-gray-200 rounded w-1/4 mt-3" />
       </div>
-
-      {/* Card body */}
-      <div className="p-4">
-        {/* Type badges */}
-        <div className="flex gap-1 flex-wrap mb-2">
-          {listing.type.map((t) => (
-            <span
-              key={t}
-              className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLORS[t]}`}
-            >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-            </span>
-          ))}
-        </div>
-
-        {/* Title */}
-        <h3 className="font-semibold text-gray-900 text-sm leading-tight line-clamp-2 mb-1">
-          {listing.title}
-        </h3>
-
-        {/* Author */}
-        <p className="text-xs text-gray-500 mb-2">{listing.author}</p>
-
-        {/* Condition badge */}
-        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CONDITION_COLORS[listing.condition]}`}>
-          {CONDITION_LABELS[listing.condition]}
-        </span>
-
-        {/* Price */}
-        <div className="mt-3 flex items-center justify-between">
-          <span className="font-bold text-gray-900">
-            {listing.type.includes('sale') && listing.price
-              ? `$${parseFloat(listing.price).toFixed(2)}`
-              : <span className="text-green-600 font-semibold">Free</span>}
-          </span>
-          <span className="text-xs text-gray-400">
-            {listing.seller?.name}
-          </span>
-        </div>
-      </div>
-    </Link>
+    </div>
   );
 }
 
-/**
- * BrowsePage — the main book discovery page.
- * Shows all active listings in a responsive grid with search/filter/sort.
- */
 function BrowsePage() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
 
-  // Filter state — these control what we pass to the API
-  const [search, setSearch] = useState('');
+  // Raw search input (updates on every keystroke)
+  const [searchInput, setSearchInput] = useState('');
+  // Debounced value — only updates after user stops typing for 500ms
+  const debouncedSearch = useDebounce(searchInput, 500);
+
   const [condition, setCondition] = useState('');
   const [type, setType] = useState('');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(1);
+  const [showFilters, setShowFilters] = useState(false);
 
-  // React Query fetches listings whenever any filter changes
-  // queryKey includes all filters — when they change, a fresh fetch runs
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['listings', { search, condition, type, sort, page }],
-    queryFn: () => getListings({ search, condition, type, sort, page, limit: 12 }),
-    keepPreviousData: true, // Show old data while new data loads (smooth pagination)
+  // Reset to page 1 when any filter changes
+  useEffect(() => { setPage(1); }, [debouncedSearch, condition, type, minPrice, maxPrice, sort]);
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['listings', { search: debouncedSearch, condition, type, minPrice, maxPrice, sort, page }],
+    queryFn: () => getListings({ search: debouncedSearch, condition, type, minPrice, maxPrice, sort, page, limit: 12 }),
+    keepPreviousData: true,
   });
 
-  const handleSearch = (e) => {
-    e.preventDefault();
-    setPage(1); // Reset to first page on new search
+  const activeFilterCount = [condition, type, minPrice, maxPrice].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setCondition('');
+    setType('');
+    setMinPrice('');
+    setMaxPrice('');
+    setSort('newest');
+    setSearchInput('');
   };
 
   return (
@@ -129,14 +86,14 @@ function BrowsePage() {
       <nav className="bg-white shadow-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <Link to="/" className="text-xl font-bold text-indigo-600">📚 BookExchange</Link>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <button
               onClick={() => navigate('/listings/new')}
               className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition"
             >
               + Post a Book
             </button>
-            <Link to="/profile" className="text-sm text-gray-600 hover:text-gray-900">
+            <Link to="/profile" className="text-sm text-gray-600 hover:text-gray-900 hidden sm:block">
               {user?.name}
             </Link>
             <button onClick={logout} className="text-sm text-red-500 hover:text-red-700">
@@ -146,57 +103,122 @@ function BrowsePage() {
         </div>
       </nav>
 
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      <div className="max-w-7xl mx-auto px-4 py-6">
 
         {/* Search bar */}
-        <form onSubmit={handleSearch} className="flex gap-2 mb-6">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Search by title, author, or ISBN..."
-            className="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+        <div className="flex gap-2 mb-4">
+          <div className="relative flex-1">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search by title, author, or ISBN..."
+              className="w-full border border-gray-300 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            {/* Show spinner in search box while fetching */}
+            {isFetching && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                <span className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin block" />
+              </span>
+            )}
+          </div>
+
+          {/* Filter toggle button */}
           <button
-            type="submit"
-            className="bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 transition"
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-4 py-2.5 border rounded-lg text-sm font-medium transition ${
+              activeFilterCount > 0
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400'
+            }`}
           >
-            Search
+            Filters {activeFilterCount > 0 && `(${activeFilterCount})`}
           </button>
-        </form>
+        </div>
 
-        {/* Filters row */}
-        <div className="flex flex-wrap gap-3 mb-8">
-          {/* Condition filter */}
-          <select
-            value={condition}
-            onChange={(e) => { setCondition(e.target.value); setPage(1); }}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-          >
-            <option value="">All Conditions</option>
-            <option value="new">New</option>
-            <option value="like_new">Like New</option>
-            <option value="good">Good</option>
-            <option value="fair">Fair</option>
-            <option value="poor">Poor</option>
-          </select>
+        {/* Expandable filter panel */}
+        {showFilters && (
+          <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
 
-          {/* Type filter */}
-          <select
-            value={type}
-            onChange={(e) => { setType(e.target.value); setPage(1); }}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-          >
-            <option value="">All Types</option>
-            <option value="sale">For Sale</option>
-            <option value="exchange">For Exchange</option>
-            <option value="donation">Free / Donation</option>
-          </select>
+            {/* Condition */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Condition</label>
+              <select
+                value={condition}
+                onChange={(e) => setCondition(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Any</option>
+                <option value="new">New</option>
+                <option value="like_new">Like New</option>
+                <option value="good">Good</option>
+                <option value="fair">Fair</option>
+                <option value="poor">Poor</option>
+              </select>
+            </div>
 
-          {/* Sort */}
+            {/* Type */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Any</option>
+                <option value="sale">For Sale</option>
+                <option value="exchange">For Exchange</option>
+                <option value="donation">Free / Donation</option>
+              </select>
+            </div>
+
+            {/* Min Price */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Min Price ($)</label>
+              <input
+                type="number"
+                value={minPrice}
+                onChange={(e) => setMinPrice(e.target.value)}
+                placeholder="0"
+                min="0"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            {/* Max Price */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Max Price ($)</label>
+              <input
+                type="number"
+                value={maxPrice}
+                onChange={(e) => setMaxPrice(e.target.value)}
+                placeholder="999"
+                min="0"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            {/* Clear filters */}
+            {activeFilterCount > 0 && (
+              <button
+                onClick={clearFilters}
+                className="sm:col-span-4 text-sm text-red-500 hover:text-red-700 text-left"
+              >
+                ✕ Clear all filters
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Sort + result count row */}
+        <div className="flex items-center justify-between mb-5">
+          <p className="text-sm text-gray-500">
+            {data ? `${data.count} listing${data.count !== 1 ? 's' : ''} found` : ''}
+          </p>
           <select
             value={sort}
-            onChange={(e) => { setSort(e.target.value); setPage(1); }}
+            onChange={(e) => setSort(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
           >
             <option value="newest">Newest First</option>
@@ -204,26 +226,12 @@ function BrowsePage() {
             <option value="price_asc">Price: Low to High</option>
             <option value="price_desc">Price: High to Low</option>
           </select>
-
-          {/* Result count */}
-          {data && (
-            <span className="ml-auto text-sm text-gray-500 self-center">
-              {data.count} listing{data.count !== 1 ? 's' : ''} found
-            </span>
-          )}
         </div>
 
-        {/* Loading state */}
+        {/* Loading skeletons */}
         {isLoading && (
-          <div className="flex justify-center py-20">
-            <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
-
-        {/* Error state */}
-        {isError && (
-          <div className="text-center py-20 text-red-500">
-            Failed to load listings. Please try again.
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)}
           </div>
         )}
 
@@ -231,19 +239,32 @@ function BrowsePage() {
         {!isLoading && data?.listings?.length === 0 && (
           <div className="text-center py-20">
             <div className="text-5xl mb-4">📭</div>
-            <p className="text-gray-500 text-lg">No listings found</p>
-            <p className="text-gray-400 text-sm mt-1">Try adjusting your search or filters</p>
-            <button
-              onClick={() => navigate('/listings/new')}
-              className="mt-6 bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 transition"
-            >
-              Be the first to post a book
-            </button>
+            <p className="text-gray-600 text-lg font-medium">No listings found</p>
+            <p className="text-gray-400 text-sm mt-1">
+              {activeFilterCount > 0
+                ? 'Try adjusting or clearing your filters'
+                : 'Be the first to post a book!'}
+            </p>
+            {activeFilterCount > 0 ? (
+              <button
+                onClick={clearFilters}
+                className="mt-5 text-indigo-600 text-sm font-medium hover:underline"
+              >
+                Clear filters
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate('/listings/new')}
+                className="mt-5 bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 transition"
+              >
+                Post a Book
+              </button>
+            )}
           </div>
         )}
 
         {/* Listings Grid */}
-        {data?.listings?.length > 0 && (
+        {!isLoading && data?.listings?.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {data.listings.map((listing) => (
               <ListingCard key={listing.id} listing={listing} />
@@ -257,17 +278,15 @@ function BrowsePage() {
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
             >
               ← Previous
             </button>
-            <span className="text-sm text-gray-600">
-              Page {page} of {data.totalPages}
-            </span>
+            <span className="text-sm text-gray-600">Page {page} of {data.totalPages}</span>
             <button
               onClick={() => setPage((p) => Math.min(data.totalPages, p + 1))}
               disabled={page === data.totalPages}
-              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
             >
               Next →
             </button>
