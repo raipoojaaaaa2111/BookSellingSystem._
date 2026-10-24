@@ -7,13 +7,12 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
-  withCredentials: true, // IMPORTANT: send cookies (refresh token) with every request
+  withCredentials: true, // send cookies (refresh token) with every request
 });
 
 /**
- * REQUEST interceptor — runs before every outgoing request.
- * Reads the token from localStorage and adds it to the Authorization header.
- * This means you never manually add "Bearer token" in your components.
+ * REQUEST interceptor — attaches the JWT token to every request header.
+ * You never manually add "Bearer token" in your components — it's automatic.
  */
 api.interceptors.request.use(
   (config) => {
@@ -27,88 +26,84 @@ api.interceptors.request.use(
 );
 
 /**
- * RESPONSE interceptor — runs after every response.
+ * RESPONSE interceptor — handles 401 (token expired) automatically.
  *
- * The interesting case is a 401 (Unauthorized) — this means the access token expired.
+ * When any API call returns 401:
+ *   1. Try POST /api/auth/refresh to get a new access token
+ *   2. If refresh succeeds → retry the original request silently
+ *   3. If refresh fails → clear token, redirect to /login
  *
- * Flow:
- * 1. Any API call returns 401
- * 2. This interceptor catches it
- * 3. We call POST /api/auth/refresh — the browser automatically sends
- *    the httpOnly refresh token cookie (that's why withCredentials: true matters)
- * 4. Server verifies the refresh token and returns a new access token
- * 5. We save the new token to localStorage
- * 6. We retry the original failed request with the new token
- * 7. The component that made the original call never knows this happened
- *
- * The _retry flag prevents infinite loops:
- * If the refresh itself returns 401, we don't try to refresh again.
- * We redirect to login instead.
+ * IMPORTANT — we skip the refresh logic for these routes:
+ *   - /auth/me      → called by initAuth on app boot. If this 401s,
+ *                     initAuth handles it itself (clears token gracefully).
+ *                     We must NOT intercept it or we get a redirect loop.
+ *   - /auth/refresh → the refresh call itself. If this 401s, the refresh
+ *                     token is expired. Intercepting it would cause infinite loop.
+ *   - /auth/login   → login failures should show error message, not redirect.
+ *   - /auth/logout  → logout should always succeed client-side.
  */
-let isRefreshing = false;        // Are we currently refreshing?
-let failedQueue = [];            // Requests waiting for the refresh to complete
+const SKIP_REFRESH_URLS = ['/auth/me', '/auth/refresh', '/auth/login', '/auth/logout'];
 
-/**
- * processQueue — when refresh completes, retry all queued requests.
- * If refresh failed, reject them all.
- */
+let isRefreshing = false;
+let failedQueue = [];
+
 const processQueue = (error, token = null) => {
   failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve(token);
-    }
+    if (error) prom.reject(error);
+    else prom.resolve(token);
   });
   failedQueue = [];
 };
 
 api.interceptors.response.use(
-  (response) => response, // Success — just return the response unchanged
+  (response) => response,
 
   async (error) => {
     const originalRequest = error.config;
+    const requestUrl = originalRequest?.url || '';
 
-    // Only try to refresh on 401 errors and only once per request (_retry flag)
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      // If a refresh is already in progress, queue this request
+    // Check if this is a URL we should skip refresh logic for
+    const shouldSkip = SKIP_REFRESH_URLS.some((url) => requestUrl.includes(url));
+
+    // Only try to refresh on 401 errors, first attempt only, and not skipped URLs
+    if (error.response?.status === 401 && !originalRequest._retry && !shouldSkip) {
+
       if (isRefreshing) {
+        // Another refresh is already in progress — queue this request
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
         })
           .then((token) => {
             originalRequest.headers.Authorization = `Bearer ${token}`;
-            return api(originalRequest); // Retry with new token
+            return api(originalRequest);
           })
           .catch((err) => Promise.reject(err));
       }
 
-      originalRequest._retry = true; // Mark so we don't retry infinitely
+      originalRequest._retry = true;
       isRefreshing = true;
 
       try {
-        // Call the refresh endpoint — the httpOnly cookie is sent automatically
+        // Try to get a new access token using the refresh token cookie
         const { data } = await api.post('/auth/refresh');
         const newToken = data.token;
 
-        // Save the new access token
         localStorage.setItem('token', newToken);
-
-        // Update the Authorization header for future requests
         api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
 
-        // Retry all queued requests with the new token
         processQueue(null, newToken);
 
-        // Retry the original request
+        // Retry the original failed request with the new token
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
         return api(originalRequest);
+
       } catch (refreshError) {
-        // Refresh failed (refresh token also expired) — log user out
+        // Refresh token is also expired — full logout
         processQueue(refreshError, null);
         localStorage.removeItem('token');
         window.location.href = '/login';
         return Promise.reject(refreshError);
+
       } finally {
         isRefreshing = false;
       }

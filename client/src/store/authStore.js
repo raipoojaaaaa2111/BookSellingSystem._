@@ -52,12 +52,24 @@ const useAuthStore = create((set, get) => ({
     }
 
     try {
+      // Try with the current token first
       const { data } = await api.get('/auth/me');
       set({ user: data.user, token, isInitialized: true });
     } catch (err) {
-      // Token is expired or invalid — clear everything
-      localStorage.removeItem('token');
-      set({ user: null, token: null, isInitialized: true });
+      // Access token expired — try to refresh it silently
+      try {
+        const { data: refreshData } = await api.post('/auth/refresh');
+        const newToken = refreshData.token;
+        localStorage.setItem('token', newToken);
+
+        // Now fetch the user with the new token
+        const { data } = await api.get('/auth/me');
+        set({ user: data.user, token: newToken, isInitialized: true });
+      } catch (refreshErr) {
+        // Refresh also failed — truly logged out, clear everything
+        localStorage.removeItem('token');
+        set({ user: null, token: null, isInitialized: true });
+      }
     }
   },
 
